@@ -1,0 +1,5 @@
+beautifulsoup4==4.12.3
+nltk==3.8.1
+nltk==3.9.1
+streamlit==1.30.0
+streamlit==1.41.1
