@@ -1,99 +1,97 @@
-from bs4 import BeautifulSoup
-from nltk.tokenize import word_tokenize
-import streamlit as st
 import pickle
-import string
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem.porter import PorterStemmer
+import streamlit as st
+import requests
 import os
 
-# Ensure required NLTK data is available
-nltk.download('punkt')
-nltk.download('stopwords')
+def fetch_poster(movie_id):
+    try:
+        # TMDB API endpoint for fetching movie details
+        url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key=8f239e3e9444dc57120f11598e51a03c&append_to_response=images".format(movie_id)
+        
+        # Make a GET request with a timeout
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        
+        # Parse the JSON response
+        data = response.json()
+        
+        # Extract the poster path
+        poster_path = data.get('poster_path')
+        
+        if poster_path:
+            # Construct and return the full poster URL
+            return f"https://image.tmdb.org/t/p/w500{poster_path}"
+        else:
+            # Return a placeholder image if no poster is available
+            return "https://via.placeholder.com/500"
+    except requests.exceptions.RequestException as e:
+        # Log any request-related errors
+        print(f"Error fetching poster for movie ID {movie_id}: {e}")
+        # Return a placeholder image in case of error
+        return "https://via.placeholder.com/500"
 
-# Initialize required objects
-stop_words = set(stopwords.words('english'))
-ps = PorterStemmer()
+def recommend(movie):
+    # Check if the movie exists in the dataset
+    if movie not in movies['title'].values:
+        st.error(f"'{movie}' not found in the dataset.")
+        return [], []
 
-# Function to preprocess text
-def preprocess_text(text):
-    """
-    Preprocesses the input text:
-    1. Converts to lowercase.
-    2. Removes HTML tags.
-    3. Removes punctuation.
-    4. Removes stopwords.
-    5. Removes numeric characters.
-    6. Applies stemming.
-    """
-    # Convert to lowercase
-    text = text.lower()
+    # Get the index of the movie
+    index = movies[movies['title'] == movie].index
+    if index.empty:
+        st.error(f"Index for '{movie}' not found.")
+        return [], []
+    index = index[0]
 
-    # Remove HTML tags
-    text = BeautifulSoup(text, 'html.parser').get_text()
+    # Check similarity matrix dimensions
+    if index >= len(similarity):
+        st.error(f"Index {index} is out of bounds for similarity matrix.")
+        return [], []
 
-    # Remove punctuation
-    text = ''.join(ch for ch in text if ch not in string.punctuation)
+    # Calculate distances and recommend top 5 movies
+    distances = sorted(list(enumerate(similarity[index])), reverse=True, key=lambda x: x[1])
+    recommended_movie_names = []
+    recommended_movie_posters = []
+    for i in distances[1:6]:  # Skip the first (self-match)
+        try:
+            movie_id = movies.iloc[i[0]].movie_id
+            recommended_movie_posters.append(fetch_poster(movie_id))
+            recommended_movie_names.append(movies.iloc[i[0]].title)
+        except IndexError as e:
+            st.warning(f"Error fetching data for recommended movie at index {i[0]}: {e}")
+    return recommended_movie_names, recommended_movie_posters
 
-    # Remove stopwords
-    words = text.split()
-    filtered_words = [word for word in words if word.lower() not in stop_words]
-    text = ' '.join(filtered_words)
+# Streamlit App UI
+st.header("Movie Recommender System")
 
-    # Remove numeric characters
-    text = ''.join([char for char in text if not char.isdigit()])
-
-    # Apply stemming
-    words = word_tokenize(text)
-    stemmed_words = [ps.stem(word) for word in words]
-    return ' '.join(stemmed_words)
-
-# Load vectorizer and model
-vectorizer_path = r'c:\Users\Asus\python\Project\IMDB_50_k\vectorizer_sent.pkl'
-model_path = r'c:\Users\Asus\python\Project\IMDB_50_k\model2_sent.pkl'
+# Load data files
+movies_file = os.path.join('C:/Users/Asus/python/Project/Recomendation_movi/movie_list.pkl')
+similarity_file = os.path.join('C:/Users/Asus/python/Project/Recomendation_movi/similarity.pkl')
 
 try:
-    with open(vectorizer_path, 'rb') as vec_file:
-        tfidf = pickle.load(vec_file)
-
-    with open(model_path, 'rb') as model_file:
-        model = pickle.load(model_file)
-
-    st.success("Model and vectorizer loaded successfully.")
-except Exception as e:
-    st.error(f"Error loading model or vectorizer: {e}")
+    movies = pickle.load(open(movies_file, 'rb'))
+    similarity = pickle.load(open(similarity_file, 'rb'))
+except FileNotFoundError as e:
+    st.error(f"Required file not found: {e}")
     st.stop()
 
-# Streamlit app
-st.title("Sentiment Analysis of IMDB Movie Reviews")
+# Dropdown for movie selection
+movies_list = movies['title'].values
+selected_movie = st.selectbox(
+    'Type movie name to get recommendations',
+    movies_list
+)
 
-# Input text
-input_sms = st.text_input("Enter the review")
-if input_sms:
-    # Preprocess the input text
-    transformed_sms = preprocess_text(input_sms)
-    st.write("Transformed Text:", transformed_sms)
-
-    try:
-        # Vectorize the processed text
-        vector_input = tfidf.transform([transformed_sms])
-        st.write("Vectorized Input Shape:", vector_input.shape)
-
-        # Reshape if the model expects a 3D input
-        if len(model.input_shape) == 3:  # Check if 3D input is required
-            vector_input = vector_input.toarray()  # Convert sparse to dense
-            vector_input = vector_input.reshape(1, 1, vector_input.shape[1])  # Reshape to (1, 1, features)
-            st.write("Reshaped Input Shape for Model:", vector_input.shape)
-
-        # Predict sentiment
-        result = model.predict(vector_input)[0]
-        st.write("Prediction Result:", result)
-
-        # Display result
-        if result == 1:
-            st.header("Good Review")
-        else:
-            st.header("Bad Review")
-    except Exception as e:
-        st.error(f"Error during prediction: {e}")
+# Button to trigger recommendations
+if st.button('Show Recommendation'):
+    recommended_movie_names, recommended_movie_posters = recommend(selected_movie)
+    
+    # Display recommendations if available
+    if recommended_movie_names and recommended_movie_posters:
+        cols = st.columns(5)
+        for i, col in enumerate(cols):
+            with col:
+                st.text(recommended_movie_names[i])
+                st.image(recommended_movie_posters[i])
+    else:
+        st.warning("No recommendations to display.")
